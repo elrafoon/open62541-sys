@@ -6,6 +6,7 @@
 #include <open62541/client_subscriptions.h>
 #include <open62541/server.h>
 #include <open62541/server_config_default.h>
+#include <open62541/plugin/accesscontrol_default.h>
 
 // Include with binding of `vsnprintf()` and `va_list` functions to simplify
 // formatting of log messages.
