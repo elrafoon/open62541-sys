@@ -3,6 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use regex::Regex;
+
 /// Target path in CMake build for include files.
 const CMAKE_INCLUDE: &str = "include";
 /// Target path in CMake build for lib files.
@@ -126,22 +128,43 @@ fn main() {
     // this will also prevent accidentally linking to one library build and then running
     // with another(like some older) library build
     if dylib {
-        let lib_entry = fs::read_dir(dst_lib)
+        let lib_entries: Vec<_> = fs::read_dir(dst_lib)
             .expect("Error reading cmake output directory")
             .filter_map(|e| e.ok())
-            .filter(|entry| entry.file_type().is_ok_and(|t| t.is_file()))
-            .filter(|entry| {
-                let fname = entry.file_name().to_str().unwrap().to_string();
-                let fname_lc = fname.to_ascii_lowercase();
-                fname.contains(LIB_BASE) && (fname.contains(".so") || fname_lc.contains(".dll"))
+            .collect();
+
+        let patterns = if matches!(env::var("CARGO_CFG_TARGET_OS"), Ok(os) if os == "windows") {
+            [Regex::new(r"(?i)\.dll$").unwrap()].to_vec()
+        } else {
+            [
+                Regex::new(r"\.so$").unwrap(),
+                Regex::new(r"\.so\.").unwrap(),
+            ]
+            .to_vec()
+        };
+
+        let lib_entry = patterns
+            .iter()
+            .find_map(|pat| {
+                lib_entries
+                    .iter()
+                    .find(|e| pat.is_match(e.file_name().to_str().unwrap()))
             })
-            .next()
             .expect("Can't find built library in cmake output directory");
 
         let out_dir = env::var("OUT_DIR").unwrap();
         let out = Path::new(&out_dir);
-        fs::copy(lib_entry.path(), out.join(lib_entry.file_name()))
-            .expect("Error copying built library to $OUT_DIR");
+
+        let from = lib_entry.path();
+        let to = out.join(lib_entry.file_name());
+
+        eprintln!(
+            "copy open62541 lib '{}' -> '{}'",
+            from.display(),
+            to.display()
+        );
+
+        fs::copy(from, to).expect("Error copying built library to $OUT_DIR");
     }
 
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
