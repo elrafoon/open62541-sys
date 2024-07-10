@@ -85,7 +85,9 @@ fn main() {
     let dst_include = dst.join(CMAKE_INCLUDE);
     let dst_lib = dst.join(CMAKE_LIB);
 
-    if matches!(env::var("CARGO_CFG_TARGET_OS"), Ok(os) if os == "windows") {
+    let target_os_windows = matches!(env::var("CARGO_CFG_TARGET_OS"), Ok(os) if os == "windows");
+
+    if target_os_windows {
         // We require the `Iphlpapi` library on Windows builds to avoid errors (regarding the use of
         // `if_nametoindex`, see https://github.com/open62541/open62541/issues/5622).
         println!("cargo:rustc-link-lib=Iphlpapi");
@@ -107,14 +109,14 @@ fn main() {
         Some(encryption) => match encryption {
             Encryption::OpenSSL => {
                 let openssl = pkg_config::Config::new()
-                    .statik(true)
+                    .statik(!target_os_windows)
                     .probe("openssl")
                     .expect("Can't find static openssl using pkg-config");
                 link_to_lib(&openssl);
             }
             Encryption::MBedTLS => {
                 let mbedtls = pkg_config::Config::new()
-                    .statik(true)
+                    .statik(!target_os_windows)
                     .probe("mbedtls")
                     .expect("Can't find static mbedtls using pkg-config");
                 link_to_lib(&mbedtls);
