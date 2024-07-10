@@ -56,7 +56,7 @@ encryption-mbedtls = []
 bindgen = { version = "0.69.4", features = ["experimental"] }
 cc = "1.0.83"
 cmake = "0.1.50"
-regex = "1.10"
+pkg-config = "0.3.30"
 
 [lints.rust]
 future_incompatible = "warn"

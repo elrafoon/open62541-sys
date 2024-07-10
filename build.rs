@@ -1,9 +1,7 @@
 use std::{
-    env, fs,
+    env,
     path::{Path, PathBuf},
 };
-
-use regex::Regex;
 
 /// Target path in CMake build for include files.
 const CMAKE_INCLUDE: &str = "include";
@@ -59,42 +57,16 @@ fn main() {
         // never modify files outside of `OUT_DIR`, so we disable the cache to prevent this.
         .env("PYTHONDONTWRITEBYTECODE", "1");
 
-    let mut dylib = false;
-
-    match encryption {
-        Some(encryption) => {
-            // if a dynamic encryption library is to be linked-in, it's much simpler
-            // to build whole open62541 as a dynamic library and let loading the
-            // dependencies to the OS dynamic linker.
-            //
-            // to build fully static open62541 with encryption, we would have to query
-            // cmake build cache somehow to detect exactl file paths of the static encryption
-            // libraries cmake discovered, and pass them to rust linker like this:
-            //
-            // println!("cargo:rustc-link-lib=static={SSL_PATH_FROM_CMAKE_CACHE}");
-            // println!("cargo:rustc-link-lib=static={CRYPTO_PATH_FROM_CMAKE_CACHE}");
-            //
-            // unfortunatelly, currently there is no easy way to do this
-
-            dylib = true;
-
-            match encryption {
-                Encryption::OpenSSL => {
-                    cmake.define("UA_ENABLE_ENCRYPTION", "OPENSSL");
-                    println!("cargo:rustc-link-lib=ssl");
-                    println!("cargo:rustc-link-lib=crypto");
-                }
-                Encryption::MBedTLS => {
-                    cmake.define("UA_ENABLE_ENCRYPTION", "MBEDTLS");
-                    println!("cargo:rustc-link-lib=mbedtls");
-                }
+    match &encryption {
+        Some(encryption) => match encryption {
+            Encryption::OpenSSL => {
+                cmake.define("UA_ENABLE_ENCRYPTION", "OPENSSL");
             }
-        }
+            Encryption::MBedTLS => {
+                cmake.define("UA_ENABLE_ENCRYPTION", "MBEDTLS");
+            }
+        },
         None => {}
-    }
-
-    if dylib {
-        cmake.define("BUILD_SHARED_LIBS", "ON");
     }
 
     if matches!(env::var("CARGO_CFG_TARGET_ENV"), Ok(env) if env == "musl") {
@@ -122,49 +94,33 @@ fn main() {
     println!("cargo:rustc-link-search={}", dst_lib.display());
     println!("cargo:rustc-link-lib={LIB_BASE}");
 
-    // if dynamic library was built, copy it to the $OUT_DIR next to final rust binary
-    // to save user from having to adjust LD_LIBRARY_PATH or PATH (on Windows)
-    //
-    // this will also prevent accidentally linking to one library build and then running
-    // with another(like some older) library build
-    if dylib {
-        let lib_entries: Vec<_> = fs::read_dir(dst_lib)
-            .expect("Error reading cmake output directory")
-            .filter_map(|e| e.ok())
-            .collect();
+    let link_to_lib = |lib: &pkg_config::Library| {
+        for path in lib.link_paths.iter() {
+            println!("cargo:rustc-link-search={}", path.display());
+        }
+        for file in lib.link_files.iter() {
+            println!("cargo:rustc-link-lib={}", file.display());
+        }
+    };
 
-        let patterns = if matches!(env::var("CARGO_CFG_TARGET_OS"), Ok(os) if os == "windows") {
-            [Regex::new(r"(?i)\.dll$").unwrap()].to_vec()
-        } else {
-            [
-                Regex::new(r"\.so$").unwrap(),
-                Regex::new(r"\.so\.").unwrap(),
-            ]
-            .to_vec()
-        };
-
-        let lib_entry = patterns
-            .iter()
-            .find_map(|pat| {
-                lib_entries
-                    .iter()
-                    .find(|e| pat.is_match(e.file_name().to_str().unwrap()))
-            })
-            .expect("Can't find built library in cmake output directory");
-
-        let out_dir = env::var("OUT_DIR").unwrap();
-        let out = Path::new(&out_dir);
-
-        let from = lib_entry.path();
-        let to = out.join(lib_entry.file_name());
-
-        eprintln!(
-            "copy open62541 lib '{}' -> '{}'",
-            from.display(),
-            to.display()
-        );
-
-        fs::copy(from, to).expect("Error copying built library to $OUT_DIR");
+    match &encryption {
+        Some(encryption) => match encryption {
+            Encryption::OpenSSL => {
+                let openssl = pkg_config::Config::new()
+                    .statik(true)
+                    .probe("openssl")
+                    .expect("Can't find static openssl using pkg-config");
+                link_to_lib(&openssl);
+            }
+            Encryption::MBedTLS => {
+                let mbedtls = pkg_config::Config::new()
+                    .statik(true)
+                    .probe("mbedtls")
+                    .expect("Can't find static mbedtls using pkg-config");
+                link_to_lib(&mbedtls);
+            }
+        },
+        None => {}
     }
 
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
