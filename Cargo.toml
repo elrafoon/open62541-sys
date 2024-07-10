@@ -47,6 +47,11 @@ include = [
     "open62541/tools/schema/",
 ]
 
+[features]
+encryption = ["encryption-openssl"]
+encryption-openssl = []
+encryption-mbedtls = []
+
 [build-dependencies]
 bindgen = { version = "0.69.4", features = ["experimental"] }
 cc = "1.0.83"

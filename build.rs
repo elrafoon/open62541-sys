@@ -1,5 +1,5 @@
 use std::{
-    env,
+    env, fs,
     path::{Path, PathBuf},
 };
 
@@ -29,6 +29,19 @@ fn main() {
     println!("cargo:rerun-if-changed={}", src_wrapper_c.display());
     println!("cargo:rerun-if-changed={}", src_wrapper_h.display());
 
+    enum Encryption {
+        OpenSSL,
+        MBedTLS,
+    }
+
+    let encryption = if env::var("CARGO_FEATURE_ENCRYPTION_OPENSSL").is_ok() {
+        Some(Encryption::OpenSSL)
+    } else if env::var("CARGO_FEATURE_ENCRYPTION_MBEDTLS").is_ok() {
+        Some(Encryption::MBedTLS)
+    } else {
+        None
+    };
+
     // Build bundled copy of `open62541` with CMake.
     let mut cmake = cmake::Config::new(src_open62541);
     cmake
@@ -43,6 +56,44 @@ fn main() {
         // happen when the tool `nodeset_compiler` is called. When we package a crate, builds should
         // never modify files outside of `OUT_DIR`, so we disable the cache to prevent this.
         .env("PYTHONDONTWRITEBYTECODE", "1");
+
+    let mut dylib = false;
+
+    match encryption {
+        Some(encryption) => {
+            // if a dynamic encryption library is to be linked-in, it's much simpler
+            // to build whole open62541 as a dynamic library and let loading the
+            // dependencies to the OS dynamic linker.
+            //
+            // to build fully static open62541 with encryption, we would have to query
+            // cmake build cache somehow to detect exactl file paths of the static encryption
+            // libraries cmake discovered, and pass them to rust linker like this:
+            //
+            // println!("cargo:rustc-link-lib=static={SSL_PATH_FROM_CMAKE_CACHE}");
+            // println!("cargo:rustc-link-lib=static={CRYPTO_PATH_FROM_CMAKE_CACHE}");
+            //
+            // unfortunatelly, currently there is no easy way to do this
+
+            dylib = true;
+
+            match encryption {
+                Encryption::OpenSSL => {
+                    cmake.define("UA_ENABLE_ENCRYPTION", "OPENSSL");
+                    println!("cargo:rustc-link-lib=ssl");
+                    println!("cargo:rustc-link-lib=crypto");
+                }
+                Encryption::MBedTLS => {
+                    cmake.define("UA_ENABLE_ENCRYPTION", "MBEDTLS");
+                    println!("cargo:rustc-link-lib=mbedtls");
+                }
+            }
+        }
+        None => {}
+    }
+
+    if dylib {
+        cmake.define("BUILD_SHARED_LIBS", "ON");
+    }
 
     if matches!(env::var("CARGO_CFG_TARGET_ENV"), Ok(env) if env == "musl") {
         let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
@@ -68,6 +119,30 @@ fn main() {
 
     println!("cargo:rustc-link-search={}", dst_lib.display());
     println!("cargo:rustc-link-lib={LIB_BASE}");
+
+    // if dynamic library was built, copy it to the $OUT_DIR next to final rust binary
+    // to save user from having to adjust LD_LIBRARY_PATH or PATH (on Windows)
+    //
+    // this will also prevent accidentally linking to one library build and then running
+    // with another(like some older) library build
+    if dylib {
+        let lib_entry = fs::read_dir(dst_lib)
+            .expect("Error reading cmake output directory")
+            .filter_map(|e| e.ok())
+            .filter(|entry| entry.file_type().is_ok_and(|t| t.is_file()))
+            .filter(|entry| {
+                let fname = entry.file_name().to_str().unwrap().to_string();
+                let fname_lc = fname.to_ascii_lowercase();
+                fname.contains(LIB_BASE) && (fname.contains(".so") || fname_lc.contains(".dll"))
+            })
+            .next()
+            .expect("Can't find built library in cmake output directory");
+
+        let out_dir = env::var("OUT_DIR").unwrap();
+        let out = Path::new(&out_dir);
+        fs::copy(lib_entry.path(), out.join(lib_entry.file_name()))
+            .expect("Error copying built library to $OUT_DIR");
+    }
 
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
 
