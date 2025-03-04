@@ -52,6 +52,8 @@ fn main() {
         // Explicitly set C99 standard to force Windows variants of `vsnprintf()` to conform to this
         // standard. This also matches the expected (or supported) C standard of `open62541` itself.
         .define("C_STANDARD", "99")
+        // disable LTO, gcc LTO is incompatible with rust (clang) LTO
+        .define("CMAKE_INTERPROCEDURAL_OPTIMIZATION", "OFF")
         // Python defaults to creating bytecode in `__pycache__` directories. During build, this may
         // happen when the tool `nodeset_compiler` is called. When we package a crate, builds should
         // never modify files outside of `OUT_DIR`, so we disable the cache to prevent this.
